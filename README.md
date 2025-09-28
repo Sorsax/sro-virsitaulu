@@ -1,4 +1,4 @@
-# SRO Virsitaulu (HTML-versio)
+# sro-virsitaulu
 
 HTML versio virsitaulusta
 
