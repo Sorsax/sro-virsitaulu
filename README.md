@@ -21,7 +21,7 @@ React käännös virsitaulusta
 
 > npm install tai yarn install pitäisi asentaa nämä kaikki
 
-## Kehitys
+## Asennus
 
 1. Kloonaa repository:
    ```bash
