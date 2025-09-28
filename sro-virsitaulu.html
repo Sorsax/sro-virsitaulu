@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SRO Virsitaulu</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@700&display=swap');
+        
+        body {
+            font-family: 'Open Sans', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: white;
+            color: black;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+                transition: cursor 0.2s;
+        }
+
+        .data-container {
+            display: none;
+            width: 100%;
+            text-align: center;
+        }
+
+        .data-item {
+            text-align: center;
+            margin: 0px 0;
+            font-size: 12vw;
+            font-weight: 700;
+            line-height: 1.2;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+            box-sizing: border-box;
+            min-height: 1.2em;
+        }
+
+        .data-item.has-content {
+            display: block;
+        }
+
+        .loading, .error, .refresh-btn {
+            display: none;
+        }
+    .edit-textarea {
+                width: 100%;
+                height: 70vh;
+                font-family: 'Open Sans', Arial, sans-serif;
+                font-size: 3vw; /* javascript asettaa dynaamisesti */
+                font-weight: 700;
+                line-height: 1.2;
+                box-sizing: border-box;
+                text-align: center;
+                resize: none;
+                margin: 0 auto;
+                display: none;
+                background: white;
+                color: black;
+                border: 2px solid #ccc;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            .edit-textarea.zoomed {
+            }
+    </style>
+</head>
+<body>
+    <div class="data-container" id="dataContainer">
+        <!-- Datan napsinta sheetsistä -->
+    </div>
+
+        <textarea class="edit-textarea" id="editTextarea"></textarea>
+
+    <div class="loading" id="loading"></div>
+    <div class="error" id="error"></div>
+    <button class="refresh-btn" id="refreshBtn" onclick="loadData()"></button>
+
+    <script>
+        const SHEET_ID = '1qZ3U2WMlvwOyjn7yVe0fLLmk39jbSsIk_bFk5TJhlnA';
+        const GID = '955471057'; // Virsitaulu tabimikälien GID
+        const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
+
+        // CORS Proxyt (moonta)
+        const CORS_PROXIES = [
+            'https://corsproxy.io/?',
+            'https://cors-anywhere.herokuapp.com/',
+            'https://api.codetabs.com/v1/proxy?quest=',
+            'https://thingproxy.freeboard.io/fetch/'
+        ];
+
+        let isEditMode = false;
+        let editModeActivatedAt = 0;
+        let bufferedKey = null;
+        let ignoreInputTimeout = null;
+        let manualEditDone = false;
+        let autoRefreshStopped = false;
+
+        async function loadData() {
+            const loadingEl = document.getElementById('loading');
+            const errorEl = document.getElementById('error');
+            const dataContainer = document.getElementById('dataContainer');
+            const refreshBtn = document.getElementById('refreshBtn');
+                const editTextarea = document.getElementById('editTextarea');
+
+            loadingEl.style.display = 'block';
+            errorEl.style.display = 'none';
+            refreshBtn.disabled = true;
+
+            const originalDisplayState = dataContainer.style.display;
+            
+            let csvText = null;
+            let lastError = null;
+
+                // Prevent overwriting local edits or fetching after manual edit
+                if (isEditMode || manualEditDone) {
+                    loadingEl.style.display = 'none';
+                    refreshBtn.disabled = false;
+                    return;
+                }
+            for (const method of ['direct', ...CORS_PROXIES]) {
+                try {
+                    let response;
+                    
+                    if (method === 'direct') {
+                        response = await fetch(CSV_URL, { mode: 'no-cors' });
+                        continue;
+                    } else {
+                        const proxyUrl = method + encodeURIComponent(CSV_URL);
+                        response = await fetch(proxyUrl);
+                    }
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const responseText = await response.text();
+                    
+                    try {
+                        const jsonData = JSON.parse(responseText);
+                        csvText = jsonData.contents || jsonData.data || responseText;
+                    } catch {
+                        csvText = responseText;
+                    }
+                    
+                    if (csvText && (csvText.includes(',') || csvText.includes('\n'))) {
+                        break;
+                    }
+                    
+                } catch (error) {
+                    lastError = error;
+                    console.warn(`Failed with ${method}:`, error);
+                    continue;
+                }
+            }
+
+            try {
+                if (!csvText) {
+                    const publicUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${GID}`;
+                    
+                    const scriptTag = document.createElement('script');
+                    const callbackName = 'handleSheetData' + Date.now();
+                    
+                    const response = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/pub?gid=${GID}&single=true&output=csv`);
+                    csvText = await response.text();
+                }
+
+                if (!csvText) {
+                    throw lastError || new Error('Unable to fetch data from any source');
+                }
+                
+                    const contentChanged = displayData(csvText, dataContainer);
+                    if (!isEditMode && (contentChanged || originalDisplayState === 'none')) {
+                        dataContainer.style.display = 'block';
+                        editTextarea.style.display = 'none';
+                        setTimeout(() => {
+                            adjustFontToFit(dataContainer);
+                        }, 100);
+                    }
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                errorEl.style.display = 'block';
+            } finally {
+                loadingEl.style.display = 'none';
+                refreshBtn.disabled = false;
+            }
+        }
+
+        function loadManualData() {
+            const manualData = document.getElementById('manualData').value.trim();
+            const dataContainer = document.getElementById('dataContainer');
+            const errorEl = document.getElementById('error');
+            
+            if (!manualData) {
+                alert('Syötä ensin tiedot tekstikenttään');
+                return;
+            }
+            
+            try {
+                displayData(manualData, dataContainer);
+                errorEl.style.display = 'none';
+                dataContainer.style.display = 'block';
+            } catch (error) {
+                alert('Virhe tietojen käsittelyssä: ' + error.message);
+            }
+        }
+
+            function enterEditMode() {
+                if (isEditMode) return;
+                isEditMode = true;
+                    editModeActivatedAt = Date.now();
+                    bufferedKey = null;
+                    if (ignoreInputTimeout) clearTimeout(ignoreInputTimeout);
+                const dataContainer = document.getElementById('dataContainer');
+                const editTextarea = document.getElementById('editTextarea');
+                const items = dataContainer.querySelectorAll('.data-item');
+                let text = '';
+                items.forEach((item, idx) => {
+                    text += item.textContent + (idx < items.length - 1 ? '\n' : '');
+                });
+                editTextarea.value = text;
+                editTextarea.style.display = 'block';
+                dataContainer.style.display = 'none';
+                    editTextarea.classList.add('zoomed');
+                editTextarea.focus();
+                // Set font size to match display
+                let fontSize = 40;
+                if (items.length > 0) {
+                    fontSize = parseFloat(window.getComputedStyle(items[0]).fontSize);
+                }
+                editTextarea.style.fontSize = fontSize + 'px';
+                    ignoreInputTimeout = setTimeout(() => {
+                        if (bufferedKey) {
+                            const pos = editTextarea.selectionStart;
+                            const before = editTextarea.value.slice(0, pos);
+                            const after = editTextarea.value.slice(pos);
+                            editTextarea.value = before + bufferedKey + after;
+                            editTextarea.selectionStart = editTextarea.selectionEnd = pos + bufferedKey.length;
+                            bufferedKey = null;
+                        }
+                    }, 200);
+            }
+
+            function exitEditMode(applyChanges = true) {
+                if (!isEditMode) return;
+                isEditMode = false;
+                const dataContainer = document.getElementById('dataContainer');
+                const editTextarea = document.getElementById('editTextarea');
+                    if (applyChanges) {
+                        displayData(editTextarea.value, dataContainer);
+                        manualEditDone = true;
+                        if (!autoRefreshStopped) {
+                            autoRefreshStopped = true;
+                            if (refreshInterval) {
+                                clearInterval(refreshInterval);
+                            }
+                        }
+                    }
+                editTextarea.style.display = 'none';
+                    editTextarea.classList.remove('zoomed');
+                dataContainer.style.display = 'block';
+                setTimeout(() => {
+                    adjustFontToFit(dataContainer);
+                }, 100);
+            }
+
+        function displayData(csvText, dataContainer) {
+            const rows = parseCSV(csvText);
+            
+            let lastNonEmptyIndex = -1;
+            const firstColumnValues = rows.map((row, index) => {
+                const value = row[0] ? row[0].trim() : '';
+                if (value) {
+                    lastNonEmptyIndex = index;
+                }
+                return value;
+            });
+            
+            let contentUnchanged = false;
+            if (dataContainer.children.length > 0) {
+                const currentItems = dataContainer.querySelectorAll('.data-item');
+                if (currentItems.length === lastNonEmptyIndex + 1) {
+                    contentUnchanged = true;
+                    
+                    for (let i = 0; i <= lastNonEmptyIndex; i++) {
+                        const newValue = firstColumnValues[i] || ' ';
+                        const currentValue = currentItems[i].textContent;
+                        
+                        if (newValue !== currentValue) {
+                            contentUnchanged = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (contentUnchanged) {
+                console.log('Content unchanged, skipping update');
+                return false;
+            }
+            
+            dataContainer.innerHTML = '';
+            
+            let hasContent = false;
+            
+            firstColumnValues.forEach((value, index) => {
+                if (index <= lastNonEmptyIndex) {
+                    hasContent = true;
+                    const itemEl = document.createElement('div');
+                    itemEl.className = 'data-item has-content';
+                    itemEl.textContent = value || ' ';
+                    dataContainer.appendChild(itemEl);
+                }
+            });
+
+            if (!hasContent) {
+                const noDataEl = document.createElement('div');
+                noDataEl.className = 'data-item has-content';
+                noDataEl.textContent = 'Ei tietoja saatavilla';
+                dataContainer.appendChild(noDataEl);
+            }
+            
+            adjustFontToFit(dataContainer);
+            
+            return true;
+        }
+
+        function adjustFontToFit(dataContainer) {
+            const items = dataContainer.querySelectorAll('.data-item');
+            if (items.length === 0) return;
+            
+            const windowHeight = Math.max(
+                document.documentElement.clientHeight,
+                window.innerHeight || 0
+            );
+            const windowWidth = Math.max(
+                document.documentElement.clientWidth,
+                window.innerWidth || 0
+            );
+            
+            const isPortrait = windowHeight > windowWidth;
+            
+            let fontSize;
+            
+            if (isPortrait) {
+                const heightBasedSize = Math.floor(windowHeight / (items.length * 1.5));
+                const widthBasedSize = Math.floor(windowWidth * 0.18);
+                fontSize = Math.min(heightBasedSize, widthBasedSize);
+            } else {
+                const heightBasedSize = Math.floor(windowHeight / (items.length * 1.5));
+                const widthBasedSize = Math.floor(windowWidth * 0.15);
+                fontSize = Math.min(heightBasedSize, widthBasedSize);
+            }
+            
+            if (items.length <= 3) {
+                fontSize = Math.max(fontSize, 60);
+            } else if (items.length <= 6) {
+                fontSize = Math.max(fontSize, 40);
+            } else {
+                fontSize = Math.max(fontSize, 30);
+            }
+            
+            fontSize = Math.min(fontSize, 120);
+            
+            items.forEach(item => {
+                item.style.fontSize = fontSize + 'px';
+            });
+            
+            console.log(`Viewport: ${windowWidth}x${windowHeight}, Items: ${items.length}, Font: ${fontSize}px`);
+        }
+
+        function showSampleData(dataContainer) {
+            const sampleData = [
+                '5k 278',
+                '5k 278',
+                '5k 278',
+                '5k 278'
+            ];
+            
+            dataContainer.innerHTML = '';
+            
+            sampleData.forEach(text => {
+                const itemEl = document.createElement('div');
+                itemEl.className = 'data-item has-content';
+                itemEl.textContent = text;
+                dataContainer.appendChild(itemEl);
+            });
+            
+            dataContainer.style.display = 'block';
+            
+            adjustFontToFit(dataContainer);
+        }
+
+        function parseCSV(text) {
+            const rows = [];
+            const lines = text.split('\n');
+            
+            for (let line of lines) {
+                const row = [];
+                let currentField = '';
+                let inQuotes = false;
+                
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        row.push(currentField);
+                        currentField = '';
+                    } else {
+                        currentField += char;
+                    }
+                }
+                
+                row.push(currentField);
+                
+                rows.push(row);
+            }
+            
+            return rows;
+        }
+
+        document.addEventListener('DOMContentLoaded', loadData);
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'F2' && !isEditMode) {
+                    enterEditMode();
+                } else if (isEditMode) {
+                    if (Date.now() - editModeActivatedAt < 200) {
+                        if (!bufferedKey && e.key.length === 1) {
+                            bufferedKey = e.key;
+                        }
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'Escape') {
+                        exitEditMode(false);
+                    } else if (e.key === 'F4') {
+                        e.preventDefault();
+                        exitEditMode(true);
+                    }
+                }
+            });
+
+            document.getElementById('editTextarea').addEventListener('blur', function() {
+                if (isEditMode) exitEditMode(true);
+            });
+
+        console.log("Terkut Iljalle!");
+
+            let cursorTimeout;
+            function showCursor() {
+                document.body.style.cursor = '';
+            }
+            function hideCursor() {
+                document.body.style.cursor = 'none';
+            }
+            function resetCursorTimeout() {
+                showCursor();
+                if (cursorTimeout) clearTimeout(cursorTimeout);
+                cursorTimeout = setTimeout(hideCursor, 3000);
+            }
+            window.addEventListener('mousemove', resetCursorTimeout);
+            window.addEventListener('mousedown', resetCursorTimeout);
+            window.addEventListener('keydown', resetCursorTimeout);
+            resetCursorTimeout();
+
+        let refreshInterval;
+        
+        function startRefreshInterval() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+            
+            refreshInterval = setInterval(loadData, 15000);
+        }
+        
+        document.addEventListener('DOMContentLoaded', startRefreshInterval);
+
+            setInterval(() => {
+                if (!isEditMode && !manualEditDone) {
+                    loadData();
+                }
+            }, 15000);
+        
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                const dataContainer = document.getElementById('dataContainer');
+                if (dataContainer.style.display !== 'none') {
+                    adjustFontToFit(dataContainer);
+                }
+            }, 100);
+        });
+        
+        document.addEventListener('fullscreenchange', () => {
+            setTimeout(() => {
+                const dataContainer = document.getElementById('dataContainer');
+                if (dataContainer.style.display !== 'none') {
+                    adjustFontToFit(dataContainer);
+                }
+            }, 300);
+        });
+        
+        ['webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange'].forEach(event => {
+            document.addEventListener(event, () => {
+                setTimeout(() => {
+                    const dataContainer = document.getElementById('dataContainer');
+                    if (dataContainer.style.display !== 'none') {
+                        adjustFontToFit(dataContainer);
+                    }
+                }, 300);
+            });
+        });
+    </script>
+</body>
+</html>
